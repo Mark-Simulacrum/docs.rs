@@ -1,11 +1,11 @@
 use std::env;
 use std::path::PathBuf;
 
-use clap::{Arg, App, SubCommand};
-use cratesfyi::{DocBuilder, DocBuilderOptions, db};
-use cratesfyi::utils::{build_doc, add_crate_to_queue};
-use cratesfyi::start_web_server;
+use clap::{App, Arg, SubCommand};
 use cratesfyi::db::{add_path_into_database, connect_db};
+use cratesfyi::start_web_server;
+use cratesfyi::utils::{add_crate_to_queue, build_doc};
+use cratesfyi::{db, DocBuilder, DocBuilderOptions};
 
 pub fn main() {
     logger_init();
@@ -140,8 +140,6 @@ pub fn main() {
                     .takes_value(true))))
         .get_matches();
 
-
-
     // doc subcommand
     if let Some(matches) = matches.subcommand_matches("doc") {
         let name = matches.value_of("CRATE_NAME").unwrap();
@@ -198,12 +196,17 @@ pub fn main() {
             docbuilder.save_cache().expect("Failed to save cache");
         } else if let Some(matches) = matches.subcommand_matches("crate") {
             docbuilder.load_cache().expect("Failed to load cache");
-            docbuilder.build_package(matches.value_of("CRATE_NAME").unwrap(),
-                               matches.value_of("CRATE_VERSION").unwrap())
+            docbuilder
+                .build_package(
+                    matches.value_of("CRATE_NAME").unwrap(),
+                    matches.value_of("CRATE_VERSION").unwrap(),
+                )
                 .expect("Building documentation failed");
             docbuilder.save_cache().expect("Failed to save cache");
         } else if let Some(_) = matches.subcommand_matches("add-essential-files") {
-            docbuilder.add_essential_files().expect("Failed to add essential files");
+            docbuilder
+                .add_essential_files()
+                .expect("Failed to add essential files");
         } else if let Some(_) = matches.subcommand_matches("lock") {
             docbuilder.lock().expect("Failed to lock");
         } else if let Some(_) = matches.subcommand_matches("unlock") {
@@ -211,19 +214,21 @@ pub fn main() {
         } else if let Some(_) = matches.subcommand_matches("print-options") {
             println!("{:?}", docbuilder.options());
         }
-
     } else if let Some(matches) = matches.subcommand_matches("database") {
         if let Some(matches) = matches.subcommand_matches("migrate") {
-            let version = matches.value_of("VERSION").map(|v| v.parse::<i64>()
-                                                          .expect("Version should be an integer"));
+            let version = matches
+                .value_of("VERSION")
+                .map(|v| v.parse::<i64>().expect("Version should be an integer"));
             db::migrate(version).expect("Failed to run database migrations");
         } else if let Some(_) = matches.subcommand_matches("update-github-fields") {
             cratesfyi::utils::github_updater().expect("Failed to update github fields");
         } else if let Some(matches) = matches.subcommand_matches("add-directory") {
-            add_path_into_database(&db::connect_db().unwrap(),
-                                   matches.value_of("PREFIX").unwrap_or(""),
-                                   matches.value_of("DIRECTORY").unwrap())
-                .expect("Failed to add directory into database");
+            add_path_into_database(
+                &db::connect_db().unwrap(),
+                matches.value_of("PREFIX").unwrap_or(""),
+                matches.value_of("DIRECTORY").unwrap(),
+            )
+            .expect("Failed to add directory into database");
         } else if let Some(_) = matches.subcommand_matches("update-release-activity") {
             // FIXME: This is actually util command not database
             cratesfyi::utils::update_release_activity().expect("Failed to update release activity");
@@ -235,7 +240,9 @@ pub fn main() {
             db::file::move_to_s3(&conn, 5_000).expect("Failed to update search index");
         }
     } else if let Some(matches) = matches.subcommand_matches("start-web-server") {
-        start_web_server(Some(matches.value_of("SOCKET_ADDR").unwrap_or("0.0.0.0:3000")));
+        start_web_server(Some(
+            matches.value_of("SOCKET_ADDR").unwrap_or("0.0.0.0:3000"),
+        ));
     } else if let Some(_) = matches.subcommand_matches("daemon") {
         cratesfyi::utils::start_daemon();
     } else if let Some(matches) = matches.subcommand_matches("queue") {
@@ -244,28 +251,32 @@ pub fn main() {
             let priority: i32 = priority.parse().expect("--priority was not a number");
             let conn = connect_db().expect("Could not connect to database");
 
-            add_crate_to_queue(&conn,
-                               matches.value_of("CRATE_NAME").unwrap(),
-                               matches.value_of("CRATE_VERSION").unwrap(),
-                               priority).expect("Could not add crate to queue");
+            add_crate_to_queue(
+                &conn,
+                matches.value_of("CRATE_NAME").unwrap(),
+                matches.value_of("CRATE_VERSION").unwrap(),
+                priority,
+            )
+            .expect("Could not add crate to queue");
         }
     } else {
         println!("{}", matches.usage());
     }
 }
 
-
-
 fn logger_init() {
     use std::io::Write;
 
     let mut builder = env_logger::Builder::new();
     builder.format(|buf, record| {
-        writeln!(buf, "{} [{}] {}: {}",
-                time::now().strftime("%Y/%m/%d %H:%M:%S").unwrap(),
-                record.level(),
-                record.target(),
-                record.args())
+        writeln!(
+            buf,
+            "{} [{}] {}: {}",
+            time::now().strftime("%Y/%m/%d %H:%M:%S").unwrap(),
+            record.level(),
+            record.target(),
+            record.args()
+        )
     });
     builder.parse(&env::var("RUST_LOG").unwrap_or("cratesfyi=info".to_owned()));
     builder.init();

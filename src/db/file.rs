@@ -4,22 +4,18 @@
 //! They are using so many inodes and it is better to store them in database instead of
 //! filesystem. This module is adding files into database and retrieving them.
 
-
-use std::path::{PathBuf, Path};
+use crate::error::Result;
+use failure::err_msg;
 use postgres::Connection;
+use rusoto_core::region::Region;
+use rusoto_credential::EnvironmentProvider;
+use rusoto_s3::{GetObjectRequest, PutObjectRequest, S3Client, S3};
 use rustc_serialize::json::{Json, ToJson};
 use std::fs;
 use std::io::Read;
-use crate::error::Result;
-use failure::err_msg;
-use rusoto_s3::{S3, PutObjectRequest, GetObjectRequest, S3Client};
-use rusoto_core::region::Region;
-use rusoto_credential::EnvironmentProvider;
+use std::path::{Path, PathBuf};
 
-
-fn get_file_list_from_dir<P: AsRef<Path>>(path: P,
-                                          files: &mut Vec<PathBuf>)
-                                          -> Result<()> {
+fn get_file_list_from_dir<P: AsRef<Path>>(path: P, files: &mut Vec<PathBuf>) -> Result<()> {
     let path = path.as_ref();
 
     for file in path.read_dir()? {
@@ -34,7 +30,6 @@ fn get_file_list_from_dir<P: AsRef<Path>>(path: P,
 
     Ok(())
 }
-
 
 pub fn get_file_list<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
     let path = path.as_ref();
@@ -63,9 +58,14 @@ pub struct Blob {
 }
 
 pub fn get_path(conn: &Connection, path: &str) -> Option<Blob> {
-    let rows = conn.query("SELECT path, mime, date_updated, content
+    let rows = conn
+        .query(
+            "SELECT path, mime, date_updated, content
                            FROM files
-                           WHERE path = $1", &[&path]).unwrap();
+                           WHERE path = $1",
+            &[&path],
+        )
+        .unwrap();
 
     if rows.len() == 0 {
         None
@@ -74,16 +74,24 @@ pub fn get_path(conn: &Connection, path: &str) -> Option<Blob> {
         let mut content = row.get(3);
         if content == b"in-s3" {
             let client = s3_client();
-            content = client.and_then(|c| c.get_object(GetObjectRequest {
-                bucket: "rust-docs-rs".into(),
-                key: path.into(),
-                ..Default::default()
-            }).sync().ok()).and_then(|r| r.body).map(|b| {
-                let mut b = b.into_blocking_read();
-                let mut content = Vec::new();
-                b.read_to_end(&mut content).unwrap();
-                content
-            }).unwrap();
+            content = client
+                .and_then(|c| {
+                    c.get_object(GetObjectRequest {
+                        bucket: "rust-docs-rs".into(),
+                        key: path.into(),
+                        ..Default::default()
+                    })
+                    .sync()
+                    .ok()
+                })
+                .and_then(|r| r.body)
+                .map(|b| {
+                    let mut b = b.into_blocking_read();
+                    let mut content = Vec::new();
+                    b.read_to_end(&mut content).unwrap();
+                    content
+                })
+                .unwrap();
         };
 
         Some(Blob {
@@ -104,19 +112,23 @@ fn s3_client() -> Option<S3Client> {
     Some(S3Client::new_with(
         rusoto_core::request::HttpClient::new().unwrap(),
         EnvironmentProvider::default(),
-        std::env::var("S3_ENDPOINT").ok().map(|e| Region::Custom {
-            name: "us-west-1".to_owned(),
-            endpoint: e,
-        }).unwrap_or(Region::UsWest1),
+        std::env::var("S3_ENDPOINT")
+            .ok()
+            .map(|e| Region::Custom {
+                name: "us-west-1".to_owned(),
+                endpoint: e,
+            })
+            .unwrap_or(Region::UsWest1),
     ))
 }
 
 /// Adds files into database and returns list of files with their mime type in Json
-pub fn add_path_into_database<P: AsRef<Path>>(conn: &Connection,
-                                              prefix: &str,
-                                              path: P)
-                                              -> Result<Json> {
-    use magic::{Cookie, flags};
+pub fn add_path_into_database<P: AsRef<Path>>(
+    conn: &Connection,
+    prefix: &str,
+    path: P,
+) -> Result<Json> {
+    use magic::{flags, Cookie};
     let cookie = Cookie::open(flags::MIME_TYPE)?;
     cookie.load::<&str>(&[])?;
 
@@ -135,8 +147,11 @@ pub fn add_path_into_database<P: AsRef<Path>>(conn: &Connection,
             };
             let mut content: Vec<u8> = Vec::new();
             file.read_to_end(&mut content)?;
-            let bucket_path = Path::new(prefix).join(&file_path)
-                .into_os_string().into_string().unwrap();
+            let bucket_path = Path::new(prefix)
+                .join(&file_path)
+                .into_os_string()
+                .into_string()
+                .unwrap();
 
             let mime = {
                 let mime = cookie.buffer(&content)?;
@@ -159,21 +174,21 @@ pub fn add_path_into_database<P: AsRef<Path>>(conn: &Connection,
             };
 
             let content: Option<Vec<u8>> = if let Some(client) = &client {
-                let s3_res = client.put_object(PutObjectRequest {
-                    bucket: "rust-docs-rs".into(),
-                    key: bucket_path.clone(),
-                    body: Some(content.clone().into()),
-                    content_type: Some(mime.clone()),
-                    ..Default::default()
-                }).sync();
+                let s3_res = client
+                    .put_object(PutObjectRequest {
+                        bucket: "rust-docs-rs".into(),
+                        key: bucket_path.clone(),
+                        body: Some(content.clone().into()),
+                        content_type: Some(mime.clone()),
+                        ..Default::default()
+                    })
+                    .sync();
                 match s3_res {
                     // we've successfully uploaded the content, so steal it;
                     // we don't want to put it in the DB
                     Ok(_) => None,
                     // Since s3 was configured, we want to panic on failure to upload.
-                    Err(e) => {
-                        panic!("failed to upload to {}: {:?}", bucket_path, e)
-                    },
+                    Err(e) => panic!("failed to upload to {}: {:?}", bucket_path, e),
                 }
             } else {
                 Some(content.clone().into())
@@ -181,11 +196,7 @@ pub fn add_path_into_database<P: AsRef<Path>>(conn: &Connection,
 
             file_list_with_mimes.push((mime.clone(), file_path.clone()));
 
-            (
-                bucket_path,
-                content,
-                mime,
-            )
+            (bucket_path, content, mime)
         };
 
         // check if file already exists in database
@@ -194,12 +205,16 @@ pub fn add_path_into_database<P: AsRef<Path>>(conn: &Connection,
         let content = content.unwrap_or_else(|| "in-s3".to_owned().into());
 
         if rows.get(0).get::<usize, i64>(0) == 0 {
-            trans.query("INSERT INTO files (path, mime, content) VALUES ($1, $2, $3)",
-                             &[&path, &mime, &content])?;
+            trans.query(
+                "INSERT INTO files (path, mime, content) VALUES ($1, $2, $3)",
+                &[&path, &mime, &content],
+            )?;
         } else {
-            trans.query("UPDATE files SET mime = $2, content = $3, date_updated = NOW() \
-                              WHERE path = $1",
-                             &[&path, &mime, &content])?;
+            trans.query(
+                "UPDATE files SET mime = $2, content = $3, date_updated = NOW() \
+                 WHERE path = $1",
+                &[&path, &mime, &content],
+            )?;
         }
     }
 
@@ -208,10 +223,7 @@ pub fn add_path_into_database<P: AsRef<Path>>(conn: &Connection,
     file_list_to_json(file_list_with_mimes)
 }
 
-
-
 fn file_list_to_json(file_list: Vec<(String, PathBuf)>) -> Result<Json> {
-
     let mut file_list_json: Vec<Json> = Vec::new();
 
     for file in file_list {
@@ -229,8 +241,12 @@ pub fn move_to_s3(conn: &Connection, n: usize) -> Result<()> {
     let client = s3_client().expect("configured s3");
 
     let rows = trans.query(
-            &format!("SELECT path, mime, content FROM files WHERE content != E'in-s3' LIMIT {}", n),
-            &[])?;
+        &format!(
+            "SELECT path, mime, content FROM files WHERE content != E'in-s3' LIMIT {}",
+            n
+        ),
+        &[],
+    )?;
 
     let mut rt = ::tokio::runtime::current_thread::Runtime::new().unwrap();
     let mut futures = Vec::new();
@@ -239,23 +255,25 @@ pub fn move_to_s3(conn: &Connection, n: usize) -> Result<()> {
         let mime: String = row.get(1);
         let content: Vec<u8> = row.get(2);
         let path_1 = path.clone();
-        futures.push(client.put_object(PutObjectRequest {
-            bucket: "rust-docs-rs".into(),
-            key: path.clone(),
-            body: Some(content.into()),
-            content_type: Some(mime),
-            ..Default::default()
-        }).map(move |_| {
-            path_1
-        }).map_err(move |e| {
-            panic!("failed to upload to {}: {:?}", path, e)
-        }));
+        futures.push(
+            client
+                .put_object(PutObjectRequest {
+                    bucket: "rust-docs-rs".into(),
+                    key: path.clone(),
+                    body: Some(content.into()),
+                    content_type: Some(mime),
+                    ..Default::default()
+                })
+                .map(move |_| path_1)
+                .map_err(move |e| panic!("failed to upload to {}: {:?}", path, e)),
+        );
     }
 
     use ::futures::future::Future;
     match rt.block_on(::futures::future::join_all(futures)) {
         Ok(paths) => {
-            let statement = trans.prepare("UPDATE files SET content = E'in-s3' WHERE path = $1")
+            let statement = trans
+                .prepare("UPDATE files SET content = E'in-s3' WHERE path = $1")
                 .unwrap();
             for path in paths {
                 statement.execute(&[&path]).unwrap();
@@ -274,8 +292,8 @@ pub fn move_to_s3(conn: &Connection, n: usize) -> Result<()> {
 #[cfg(test)]
 mod test {
     extern crate env_logger;
-    use std::env;
     use super::get_file_list;
+    use std::env;
 
     #[test]
     fn test_get_file_list() {
