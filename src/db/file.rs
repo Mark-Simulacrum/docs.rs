@@ -22,13 +22,13 @@ fn get_file_list_from_dir<P: AsRef<Path>>(path: P,
                                           -> Result<()> {
     let path = path.as_ref();
 
-    for file in r#try!(path.read_dir()) {
-        let file = r#try!(file);
+    for file in path.read_dir()? {
+        let file = file?;
 
-        if r#try!(file.file_type()).is_file() {
+        if file.file_type()?.is_file() {
             files.push(file.path());
-        } else if r#try!(file.file_type()).is_dir() {
-            r#try!(get_file_list_from_dir(file.path(), files));
+        } else if file.file_type()?.is_dir() {
+            get_file_list_from_dir(file.path(), files)?;
         }
     }
 
@@ -45,7 +45,7 @@ pub fn get_file_list<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
     } else if path.is_file() {
         files.push(PathBuf::from(path.file_name().unwrap()));
     } else if path.is_dir() {
-        r#try!(get_file_list_from_dir(path, &mut files));
+        get_file_list_from_dir(path, &mut files)?;
         for file_path in &mut files {
             // We want the paths in this list to not be {path}/bar.txt but just bar.txt
             *file_path = PathBuf::from(file_path.strip_prefix(path).unwrap());
@@ -117,14 +117,14 @@ pub fn add_path_into_database<P: AsRef<Path>>(conn: &Connection,
                                               path: P)
                                               -> Result<Json> {
     use magic::{Cookie, flags};
-    let cookie = r#try!(Cookie::open(flags::MIME_TYPE));
-    r#try!(cookie.load::<&str>(&[]));
+    let cookie = Cookie::open(flags::MIME_TYPE)?;
+    cookie.load::<&str>(&[])?;
 
-    let trans = r#try!(conn.transaction());
+    let trans = conn.transaction()?;
     let client = s3_client();
     let mut file_list_with_mimes: Vec<(String, PathBuf)> = Vec::new();
 
-    for file_path in r#try!(get_file_list(&path)) {
+    for file_path in get_file_list(&path)? {
         let (path, content, mime) = {
             let path = Path::new(path.as_ref()).join(&file_path);
             // Some files have insufficient permissions (like .lock file created by cargo in
@@ -134,12 +134,12 @@ pub fn add_path_into_database<P: AsRef<Path>>(conn: &Connection,
                 Err(_) => continue,
             };
             let mut content: Vec<u8> = Vec::new();
-            r#try!(file.read_to_end(&mut content));
+            file.read_to_end(&mut content)?;
             let bucket_path = Path::new(prefix).join(&file_path)
                 .into_os_string().into_string().unwrap();
 
             let mime = {
-                let mime = r#try!(cookie.buffer(&content));
+                let mime = cookie.buffer(&content)?;
                 // css's are causing some problem in browsers
                 // magic will return text/plain for css file types
                 // convert them to text/css
@@ -189,21 +189,21 @@ pub fn add_path_into_database<P: AsRef<Path>>(conn: &Connection,
         };
 
         // check if file already exists in database
-        let rows = r#try!(conn.query("SELECT COUNT(*) FROM files WHERE path = $1", &[&path]));
+        let rows = conn.query("SELECT COUNT(*) FROM files WHERE path = $1", &[&path])?;
 
         let content = content.unwrap_or_else(|| "in-s3".to_owned().into());
 
         if rows.get(0).get::<usize, i64>(0) == 0 {
-            r#try!(trans.query("INSERT INTO files (path, mime, content) VALUES ($1, $2, $3)",
-                             &[&path, &mime, &content]));
+            trans.query("INSERT INTO files (path, mime, content) VALUES ($1, $2, $3)",
+                             &[&path, &mime, &content])?;
         } else {
-            r#try!(trans.query("UPDATE files SET mime = $2, content = $3, date_updated = NOW() \
+            trans.query("UPDATE files SET mime = $2, content = $3, date_updated = NOW() \
                               WHERE path = $1",
-                             &[&path, &mime, &content]));
+                             &[&path, &mime, &content])?;
         }
     }
 
-    r#try!(trans.commit());
+    trans.commit()?;
 
     file_list_to_json(file_list_with_mimes)
 }
@@ -225,12 +225,12 @@ fn file_list_to_json(file_list: Vec<(String, PathBuf)>) -> Result<Json> {
 }
 
 pub fn move_to_s3(conn: &Connection, n: usize) -> Result<()> {
-    let trans = r#try!(conn.transaction());
+    let trans = conn.transaction()?;
     let client = s3_client().expect("configured s3");
 
-    let rows = r#try!(trans.query(
+    let rows = trans.query(
             &format!("SELECT path, mime, content FROM files WHERE content != E'in-s3' LIMIT {}", n),
-            &[]));
+            &[])?;
 
     let mut rt = ::tokio::runtime::current_thread::Runtime::new().unwrap();
     let mut futures = Vec::new();
@@ -266,7 +266,7 @@ pub fn move_to_s3(conn: &Connection, n: usize) -> Result<()> {
         }
     }
 
-    r#try!(trans.commit());
+    trans.commit()?;
 
     Ok(())
 }
