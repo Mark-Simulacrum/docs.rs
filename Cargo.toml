@@ -74,7 +74,6 @@ harness = false
 
 [build-dependencies]
 time = "0.1"
-git2 = { version = "0.13", default-features = false }
 sass-rs = "0.2"
 
 [[bin]]

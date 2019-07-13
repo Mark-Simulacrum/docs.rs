@@ -1,8 +1,7 @@
-use git2::Repository;
 use std::env;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::process::Command;
 
 fn main() {
     // Set the host target
@@ -28,14 +27,13 @@ fn write_git_version() {
 }
 
 fn get_git_hash() -> Option<String> {
-    let repo = Repository::open(env::current_dir().unwrap()).ok()?;
-    let head = repo.head().unwrap();
-
-    head.target().map(|h| {
-        let mut h = format!("{}", h);
-        h.truncate(7);
-        h
-    })
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .arg("--short=7")
+        .arg("HEAD")
+        .output()
+        .ok()?;
+    Some(String::from_utf8(output.stdout).ok()?)
 }
 
 fn compile_sass() {
