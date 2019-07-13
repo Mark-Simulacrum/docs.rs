@@ -1,12 +1,3 @@
-
-
-extern crate cratesfyi;
-extern crate clap;
-extern crate log;
-extern crate env_logger;
-extern crate time;
-
-
 use std::env;
 use std::path::PathBuf;
 
@@ -15,7 +6,6 @@ use cratesfyi::{DocBuilder, DocBuilderOptions, db};
 use cratesfyi::utils::{build_doc, add_crate_to_queue};
 use cratesfyi::start_web_server;
 use cratesfyi::db::{add_path_into_database, connect_db};
-
 
 pub fn main() {
     logger_init();

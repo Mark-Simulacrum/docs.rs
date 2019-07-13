@@ -1,14 +1,8 @@
-
-extern crate time;
-extern crate sass_rs;
-extern crate git2;
-
 use std::env;
 use std::path::Path;
 use std::fs::File;
 use std::io::Write;
 use git2::Repository;
-
 
 fn main() {
     write_git_version();

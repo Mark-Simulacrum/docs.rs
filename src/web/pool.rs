@@ -4,7 +4,7 @@ use iron::prelude::*;
 use iron::{BeforeMiddleware, typemap};
 use r2d2;
 use r2d2_postgres;
-use db::create_pool;
+use crate::db::create_pool;
 
 
 pub struct Pool {
